@@ -1,0 +1,201 @@
+name: Release and Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: terminalmap
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Build the Windows release binary and upload to the GitHub release
+  # ------------------------------------------------------------------
+  build:
+    name: Build Windows binary
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      zip_name: ${{ steps.meta.outputs.zip_name }}
+      sha256: ${{ steps.checksum.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Extract version from tag
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          $version = $tag -replace '^v', ''
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "zip_name=terminalmap-$version-windows-x86_64.zip" >> $env:GITHUB_OUTPUT
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Create release zip
+        shell: pwsh
+        run: |
+          $zip = "${{ steps.meta.outputs.zip_name }}"
+          Copy-Item "target\x86_64-pc-windows-msvc\release\terminalmap.exe" "terminalmap.exe"
+          Copy-Item "LICENSE" "LICENSE"
+          Copy-Item "README.md" "README.md"
+          Compress-Archive -Path "terminalmap.exe","LICENSE","README.md" -DestinationPath $zip
+
+      - name: Compute SHA256 checksum
+        id: checksum
+        shell: pwsh
+        run: |
+          $zip = "${{ steps.meta.outputs.zip_name }}"
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          echo "sha256=$hash" >> $env:GITHUB_OUTPUT
+          "$hash  $zip" | Out-File -Encoding ascii -FilePath "$zip.sha256"
+
+      - name: Upload assets to GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $zip = "${{ steps.meta.outputs.zip_name }}"
+          gh release upload "${{ github.event.release.tag_name }}" $zip "$zip.sha256" --clobber
+
+      - name: Upload zip artifact for downstream jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-zip
+          path: ${{ steps.meta.outputs.zip_name }}
+
+  # ------------------------------------------------------------------
+  # 2. Publish to crates.io
+  # ------------------------------------------------------------------
+  publish-crates:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --no-verify
+
+  # ------------------------------------------------------------------
+  # 3. Publish to Chocolatey
+  # ------------------------------------------------------------------
+  publish-choco:
+    name: Publish to Chocolatey
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-zip
+
+      - name: Prepare Chocolatey package
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+          ZIP_NAME: ${{ needs.build.outputs.zip_name }}
+        run: |
+          $downloadUrl = "https://github.com/psmux/TerminalMap/releases/download/v$env:VERSION/$env:ZIP_NAME"
+
+          # Patch the nuspec with the real version
+          $nuspec = Get-Content "choco\terminalmap.nuspec" -Raw
+          $nuspec = $nuspec -replace '\$version\$', $env:VERSION
+          Set-Content "choco\terminalmap.nuspec" $nuspec -Encoding utf8
+
+          # Patch chocolateyInstall.ps1 with the real URL and checksum
+          $install = Get-Content "choco\tools\chocolateyInstall.ps1" -Raw
+          $install = $install -replace '\$env:CHOCO_PKG_URL', "'$downloadUrl'"
+          $install = $install -replace '\$env:CHOCO_PKG_CHECKSUM', "'$env:SHA256'"
+          Set-Content "choco\tools\chocolateyInstall.ps1" $install -Encoding utf8
+
+      - name: Build Chocolatey package
+        shell: pwsh
+        run: |
+          choco pack "choco\terminalmap.nuspec" --output-directory "choco"
+
+      - name: Push to Chocolatey
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          $nupkg = Get-ChildItem "choco\*.nupkg" | Select-Object -First 1
+          choco push $nupkg.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+
+  # ------------------------------------------------------------------
+  # 4. Publish to winget (microsoft/winget-pkgs)
+  # ------------------------------------------------------------------
+  publish-winget:
+    name: Publish to winget
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - name: Install wingetcreate
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://aka.ms/wingetcreate/latest" -OutFile wingetcreate.exe
+
+      - name: Submit to winget
+        shell: pwsh
+        env:
+          WINGET_GH_PAT: ${{ secrets.WINGET_GH_PAT }}
+          VERSION: ${{ needs.build.outputs.version }}
+          ZIP_NAME: ${{ needs.build.outputs.zip_name }}
+        run: |
+          $downloadUrl = "https://github.com/psmux/TerminalMap/releases/download/v$env:VERSION/$env:ZIP_NAME"
+          .\wingetcreate.exe update psmux.TerminalMap `
+            --submit `
+            --version $env:VERSION `
+            --urls $downloadUrl `
+            --token $env:WINGET_GH_PAT
+        # Note: The first submission requires 'wingetcreate new' instead of 'update'.
+        # The workflow below handles both cases.
+
+      - name: Submit new manifest if update fails
+        if: failure()
+        shell: pwsh
+        env:
+          WINGET_GH_PAT: ${{ secrets.WINGET_GH_PAT }}
+          VERSION: ${{ needs.build.outputs.version }}
+          ZIP_NAME: ${{ needs.build.outputs.zip_name }}
+        run: |
+          $downloadUrl = "https://github.com/psmux/TerminalMap/releases/download/v$env:VERSION/$env:ZIP_NAME"
+          .\wingetcreate.exe new $downloadUrl `
+            --submit `
+            --version $env:VERSION `
+            --name "TerminalMap" `
+            --publisher "psmux" `
+            --package-identifier "psmux.TerminalMap" `
+            --license "MIT" `
+            --license-url "https://github.com/psmux/TerminalMap/blob/master/LICENSE" `
+            --homepage "https://github.com/psmux/TerminalMap" `
+            --description "High precision terminal map viewer. Renders OpenStreetMap vector tiles using braille characters." `
+            --short-description "Terminal map viewer with braille rendering" `
+            --token $env:WINGET_GH_PAT

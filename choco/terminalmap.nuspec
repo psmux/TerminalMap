@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>terminalmap</id>
+    <version>$version$</version>
+    <title>TerminalMap</title>
+    <authors>psmux</authors>
+    <owners>psmux</owners>
+    <projectUrl>https://github.com/psmux/TerminalMap</projectUrl>
+    <projectSourceUrl>https://github.com/psmux/TerminalMap</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/psmux/TerminalMap/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/psmux/TerminalMap/blob/master/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <iconUrl>https://raw.githubusercontent.com/psmux/TerminalMap/master/screenshot.png</iconUrl>
+    <summary>Render real world maps in your terminal using braille characters.</summary>
+    <description>TerminalMap is a high precision, interactive map viewer and embeddable Rust SDK that turns OpenStreetMap vector tiles into beautiful braille/ASCII art, right in any terminal.
+
+Works offline at low zoom. No API keys. No external dependencies. Just a terminal.
+
+Features:
+* Renders OpenStreetMap vector tiles using Unicode braille characters
+* Smooth zoom from world view to street level (zoom 0 to 18)
+* Keyboard and mouse navigation
+* Marker system with shapes, colors, and animations
+* Scriptable camera with smooth fly to animation
+* Embedded offline tiles for low zoom
+* Tile caching (in memory LRU + persistent disk cache)
+* Mapbox GL style support
+    </description>
+    <releaseNotes>https://github.com/psmux/TerminalMap/releases</releaseNotes>
+    <tags>terminal map tui openstreetmap braille rust cli</tags>
+    <copyright>Copyright (c) 2026 psmux</copyright>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+    <file src="legal\**" target="legal" />
+  </files>
+</package>

@@ -51,7 +51,29 @@ It renders Mapbox Vector Tiles (MVT/protobuf) using Unicode braille characters a
 
 ## 🚀 Quick Start
 
-### Install and run
+### 📥 Install
+
+Choose your preferred method:
+
+#### Cargo (Rust)
+
+```bash
+cargo install terminalmap
+```
+
+#### Chocolatey (Windows)
+
+```powershell
+choco install terminalmap
+```
+
+#### Winget (Windows)
+
+```powershell
+winget install psmux.TerminalMap
+```
+
+#### From source
 
 ```bash
 git clone https://github.com/psmux/TerminalMap.git

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "High precision terminal map viewer and reusable TUI map SDK. Renders OpenStreetMap vector tiles using braille characters."
 repository = "https://github.com/psmux/TerminalMap"
+license = "MIT"
 keywords = ["map", "terminal", "tui", "openstreetmap", "braille"]
 categories = ["command-line-utilities", "visualization"]
 
