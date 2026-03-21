@@ -739,18 +739,19 @@ jobs:
       - name: Download .deb from GitHub Release
         run: |
           tag="${{ github.ref_name }}"
-          ver="${tag#v}"
           repo="${{ github.repository }}"
-          # cargo-deb names it terminalmap_VERSION_amd64.deb
-          deb_url="https://github.com/$repo/releases/download/$tag/terminalmap_${ver}_amd64.deb"
-          echo "Downloading $deb_url"
-          for i in 1 2 3 4 5; do
-            if curl -sL -o "terminalmap_${ver}_amd64.deb" "$deb_url"; then break; fi
-            echo "Retry $i..."
-            sleep $((i * 10))
-          done
+          # Find the actual .deb asset name (cargo-deb may add revision suffix like -1)
+          deb_name=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name | select(endswith(".deb"))')
+          if [ -z "$deb_name" ]; then
+            echo "FATAL: No .deb asset found in release $tag"
+            exit 1
+          fi
+          echo "Found .deb asset: $deb_name"
+          gh release download "$tag" --repo "$repo" --pattern "*.deb"
           ls -la *.deb
-          dpkg-deb --info "terminalmap_${ver}_amd64.deb"
+          dpkg-deb --info "$deb_name"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Import GPG signing key
         run: |
@@ -768,9 +769,17 @@ jobs:
           set -e
           ver="${{ steps.version.outputs.VERSION }}"
 
+          # Find the .deb file
+          deb_file=$(ls *.deb 2>/dev/null | head -1)
+          if [ -z "$deb_file" ]; then
+            echo "FATAL: No .deb file found in working directory"
+            exit 1
+          fi
+          echo "Using .deb: $deb_file"
+
           # Copy .deb into pool
           mkdir -p apt-repo/pool/main
-          cp "terminalmap_${ver}_amd64.deb" apt-repo/pool/main/
+          cp "$deb_file" apt-repo/pool/main/
 
           cd apt-repo
 
