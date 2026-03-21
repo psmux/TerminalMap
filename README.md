@@ -1,48 +1,65 @@
-# TerminalMap
+# 🗺️ TerminalMap
 
-**Render real world maps in your terminal.** A high precision, interactive map viewer and embeddable Rust SDK that turns OpenStreetMap vector tiles into beautiful braille/ASCII art, right in any terminal.
+**The entire world, rendered in your terminal.** A high precision, interactive map viewer and embeddable Rust SDK that turns OpenStreetMap vector tiles into beautiful braille/ASCII art, right in any terminal.
 
-Works offline at low zoom. No API keys required. No external dependencies beyond a terminal.
+Works offline at low zoom. No API keys. No external dependencies. Just a terminal.
 
 ![TerminalMap world view](screenshot.png)
 
-## What is this
+---
+
+> 🦀 **Made with love using Rust** | 💻 For terminal lovers | 🌍 Powered by OpenStreetMap
+
+---
+
+## 🤔 What is this
 
 TerminalMap is two things:
 
-1. **A standalone terminal app** for browsing OpenStreetMap interactively with keyboard and mouse
-2. **A Rust library (SDK)** you can embed in any TUI application to add live, zoomable maps
+1. **A standalone terminal app** 🖥️ for browsing OpenStreetMap interactively with keyboard and mouse
+2. **A Rust library (SDK)** 📦 you can embed in any TUI application to add live, zoomable maps
 
-It renders Mapbox Vector Tiles (MVT/protobuf) using Unicode braille characters at 2x8 subpixel resolution per terminal cell, giving you smooth, detailed maps at every zoom level from continents to individual streets.
+It renders Mapbox Vector Tiles (MVT/protobuf) using Unicode braille characters at 2x8 subpixel resolution per terminal cell, giving you smooth, detailed maps at every zoom level from continents down to individual streets.
 
-## Features
+### 🙌 Who is this for?
 
-- Renders OpenStreetMap vector tiles using Unicode braille characters for high resolution
-- Smooth zoom from world view to street level (zoom 0 to 18)
-- Keyboard and mouse navigation (pan, zoom, scroll)
-- Full Mapbox Vector Tile (MVT/protobuf) parsing
-- Mapbox GL style support with layer filtering and color mapping
-- Label collision detection to avoid overlapping text
-- Polygon triangulation and filled rendering
-- Tile caching (in memory LRU + persistent disk cache)
-- Embedded offline tiles for low zoom (world view works without network)
-- Toggle between braille and ASCII block character rendering
-- Marker system with shapes, colors, and animations (blink, pulse, flash)
-- Scriptable camera with smooth fly to animation between locations
-- Multiple independent map instances for dashboards and split views
-- Designed as a reusable library component with `MapState` API
+- 🦀 **Rustaceans** who want a real world use case for terminal rendering
+- 💻 **Terminal enthusiasts** who live in the command line
+- 🗺️ **GIS and mapping nerds** exploring vector tiles and OpenStreetMap data
+- 🧑‍💻 **TUI developers** building dashboards, DevOps tools, or monitoring UIs
+- 🎨 **Creative coders** experimenting with braille art and Unicode rendering
+- 🌍 **Open source advocates** looking for API free, self contained mapping
+- 📡 **DevOps and SRE teams** who want geographic context in terminal dashboards
+- 🏠 **Offline first builders** needing maps without network dependencies
 
-## Quick Start
+## ✨ Features
+
+- 🔤 Renders OpenStreetMap vector tiles using Unicode braille characters for high resolution
+- 🔎 Smooth zoom from world view to street level (zoom 0 to 18)
+- ⌨️ Keyboard and mouse navigation (pan, zoom, scroll)
+- 📐 Full Mapbox Vector Tile (MVT/protobuf) parsing
+- 🎨 Mapbox GL style support with layer filtering and color mapping
+- 🏷️ Label collision detection to avoid overlapping text
+- 🔺 Polygon triangulation and filled rendering
+- 💾 Tile caching (in memory LRU + persistent disk cache)
+- 📦 Embedded offline tiles for low zoom (world view works without network)
+- 🔁 Toggle between braille and ASCII block character rendering
+- 📍 Marker system with shapes, colors, and animations (blink, pulse, flash)
+- 🎬 Scriptable camera with smooth fly to animation between locations
+- 🖼️ Multiple independent map instances for dashboards and split views
+- 🧩 Designed as a reusable library component with `MapState` API
+
+## 🚀 Quick Start
 
 ### Install and run
 
 ```bash
-git clone https://github.com/Marlocarlo/TerminalMap.git
+git clone https://github.com/psmux/TerminalMap.git
 cd TerminalMap
 cargo run --release
 ```
 
-### Controls
+### 🎮 Controls
 
 | Key | Action |
 |-----|--------|
@@ -58,7 +75,7 @@ cargo run --release
 | Mouse scroll | Zoom in/out |
 | q / Esc | Quit |
 
-### As a library (Map SDK)
+### 📦 As a library (Map SDK)
 
 TerminalMap is designed as a **reusable map component** you can embed in any Rust TUI application. Each `MapState` is an independent map instance with its own center, zoom, markers, and renderer. You can create as many as you need and place them wherever you want in your layout.
 
@@ -71,7 +88,7 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 ```
 
-#### Minimal example
+#### 🧪 Minimal example
 
 ```rust
 use terminalmap::config::MapConfig;
@@ -90,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-#### Startup view recipes
+#### 🗺️ Startup view recipes
 
 Control exactly what the user sees when the map first loads:
 
@@ -136,7 +153,7 @@ let config = MapConfig {
 let mut map = MapState::new(config).await?;
 ```
 
-#### Handling keyboard and mouse input
+#### ⌨️ Handling keyboard and mouse input
 
 TerminalMap does not capture input on its own. You wire up whatever keys you want to the `MapState` methods. Here is a complete example using crossterm:
 
@@ -211,7 +228,7 @@ The zoom/pan math is simple:
 - `set_center(lat, lon)` jumps instantly to a coordinate
 - `fit_world()` auto calculates zoom to show all landmass
 
-#### Multiple maps side by side
+#### 🖼️ Multiple maps side by side
 
 Each `MapState` is fully independent. Create as many as you need for split views, dashboards, or comparison layouts:
 
@@ -233,7 +250,7 @@ let detail_frame = detail.render().await?;
 // Position each frame wherever you want in your TUI layout
 ```
 
-### Markers
+### 📍 Markers
 
 TerminalMap includes a full marker system for plotting points of interest on the map. Markers support custom colors, shapes, animations, and labels.
 
@@ -331,7 +348,7 @@ if map.has_animated_markers() {
 }
 ```
 
-### MapState API reference
+### 🧩 MapState API reference
 
 | Method | Description |
 |--------|-------------|
@@ -360,7 +377,7 @@ if map.has_animated_markers() {
 | `camera()` / `camera_mut()` | Access the camera controller |
 | `needs_animation_redraw()` | Check if markers or camera need redraws |
 
-### Camera / auto animation
+### 🎬 Camera / auto animation
 
 TerminalMap includes a scriptable camera that smoothly flies the map between locations. It works out of the box with one line, or you can fully script your own tour.
 
@@ -493,7 +510,7 @@ The camera automatically handles all the smooth motion:
 | `cam.tick()` | Advance one frame, returns (lat, lon, zoom) |
 | `cam.looping` | `true` = loop forever, `false` = play once |
 
-### MapConfig options
+### ⚙️ MapConfig options
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -511,7 +528,7 @@ The camera automatically handles all the smooth motion:
 | `poi_marker` | `◉` | Character used for point of interest symbols |
 | `show_labels` | `true` | Show country/city names and POI labels |
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 TerminalMap/
@@ -535,7 +552,7 @@ TerminalMap/
     bright.json     -- Bright theme
 ```
 
-## Tile Source
+## 🌐 Tile Source
 
 By default, TerminalMap fetches vector tiles from [OpenFreeMap](https://openfreemap.org), a free, open source vector tile service with no API keys or usage limits. The tile data comes from OpenStreetMap. Low zoom levels (zoom 0 and 1) are embedded directly in the binary, so world view rendering works completely offline.
 
@@ -555,7 +572,17 @@ config.source = "https://your-tile-server.com/tiles/".to_string();
 
 Tiles are expected in Mapbox Vector Tile (MVT) protobuf format. Both OpenMapTiles and Mapbox Streets v6 schemas are supported transparently.
 
-## Credits
+## 💖 Credits
 
 Inspired by [mapscii](https://github.com/rastapasta/mapscii) by Michael Strassburger.
 Tile data from [OpenStreetMap](https://www.openstreetmap.org/) via [OpenFreeMap](https://openfreemap.org).
+
+---
+
+⭐ **If you find this useful, give it a star!** It helps others discover the project.
+
+🦀 Built with Rust. 🗺️ Powered by OpenStreetMap. 💻 Made for the terminal.
+
+---
+
+*TerminalMap is free and open source. Contributions, issues, and feature requests are welcome!*
