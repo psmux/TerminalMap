@@ -1,0 +1,50 @@
+[package]
+name = "terminalmap"
+version = "0.1.0"
+edition = "2021"
+description = "High precision terminal map viewer and reusable TUI map SDK. Renders OpenStreetMap vector tiles using braille characters."
+repository = "https://github.com/Marlocarlo/TerminalMap"
+keywords = ["map", "terminal", "tui", "openstreetmap", "braille"]
+categories = ["command-line-utilities", "visualization"]
+
+[dependencies]
+# TUI framework
+crossterm = "0.28"
+ratatui = "0.29"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client for tile fetching
+reqwest = { version = "0.12", features = ["rustls-tls"] }
+
+# Protobuf decoding for vector tiles
+prost = "0.13"
+
+# Raw bytes handling
+bytes = "1"
+
+# Gzip decompression
+flate2 = "1"
+
+# JSON parsing for style files
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Spatial indexing (like RBush)
+rstar = "0.12"
+
+# Polygon triangulation (like earcut)
+earcutr = "0.4"
+
+# Color handling (x256 equivalent)
+ansi_colours = "1"
+
+# LRU cache for tiles
+lru = "0.12"
+
+# Directory paths
+dirs = "6"
+
+# Error handling
+anyhow = "1"
