@@ -49,3 +49,15 @@ dirs = "6"
 
 # Error handling
 anyhow = "1"
+
+[package.metadata.deb]
+maintainer = "psmux <psmux-apt@users.noreply.github.com>"
+copyright = "2026, psmux"
+extended-description = "TerminalMap is a high precision, interactive map viewer and embeddable Rust SDK that turns OpenStreetMap vector tiles into beautiful braille/ASCII art right in any terminal. Works offline at low zoom. No API keys required."
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/terminalmap", "usr/bin/", "755"],
+  ["README.md", "usr/share/doc/terminalmap/", "644"],
+  ["LICENSE", "usr/share/doc/terminalmap/", "644"],
+]

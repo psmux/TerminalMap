@@ -84,11 +84,80 @@ jobs:
           path: terminalmap-*-windows-x64.zip
 
   # ------------------------------------------------------------------
+  # 1b. Build Linux release binary + .deb package
+  # ------------------------------------------------------------------
+  build-linux:
+    name: Build Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Verify binary exists
+        run: |
+          exe="target/x86_64-unknown-linux-gnu/release/terminalmap"
+          if [ ! -f "$exe" ]; then
+            echo "FATAL: Expected binary '$exe' not found!"
+            ls -la target/x86_64-unknown-linux-gnu/release/ || true
+            exit 1
+          fi
+          size=$(du -h "$exe" | cut -f1)
+          echo "Binary: $exe ($size)"
+
+      - name: Build .deb package
+        run: |
+          cargo deb --target x86_64-unknown-linux-gnu --no-build
+          DEB=$(ls target/x86_64-unknown-linux-gnu/debian/*.deb)
+          echo "Built: $DEB"
+          dpkg-deb --info "$DEB"
+
+      - name: Create release tarball
+        run: |
+          TAG="${{ github.ref_name }}"
+          DIR="terminalmap-$TAG-linux-x64"
+          mkdir -p "$DIR"
+          cp target/x86_64-unknown-linux-gnu/release/terminalmap "$DIR/"
+          cp LICENSE README.md "$DIR/"
+          tar czf "$DIR.tar.gz" "$DIR"
+          echo "Tarball: $DIR.tar.gz"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminalmap-linux-x64
+          path: terminalmap-*-linux-x64.tar.gz
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminalmap-deb
+          path: target/x86_64-unknown-linux-gnu/debian/*.deb
+
+  # ------------------------------------------------------------------
   # 2. Create GitHub Release with changelog
   # ------------------------------------------------------------------
   release:
     name: Create Release
-    needs: build
+    needs: [build, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,6 +206,8 @@ jobs:
             echo "| Platform | File |"
             echo "|----------|------|"
             echo "| Windows x64 (Intel/AMD 64 bit) | \`terminalmap-${CURRENT_TAG}-windows-x64.zip\` |"
+            echo "| Linux x64 (tarball) | \`terminalmap-${CURRENT_TAG}-linux-x64.tar.gz\` |"
+            echo "| Linux x64 (.deb) | \`terminalmap_${CURRENT_TAG#v}_amd64.deb\` |"
             echo ""
             echo "### Installation"
             echo ""
@@ -160,6 +231,13 @@ jobs:
             echo "scoop bucket add terminalmap https://github.com/psmux/scoop-terminalmap"
             echo "scoop install terminalmap"
             echo "\`\`\`"
+            echo ""
+            echo "**Via APT (Debian/Ubuntu):**"
+            echo "\`\`\`bash"
+            echo "curl -fsSL https://psmux.github.io/apt-repo/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/terminalmap.gpg"
+            echo 'echo "deb [signed-by=/usr/share/keyrings/terminalmap.gpg] https://psmux.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/terminalmap.list'
+            echo "sudo apt update && sudo apt install terminalmap"
+            echo "\`\`\`"
           } > /tmp/release_body.md
 
       - name: Download all artifacts
@@ -173,6 +251,8 @@ jobs:
         with:
           files: |
             terminalmap-windows-x64/*.zip
+            terminalmap-linux-x64/*.tar.gz
+            terminalmap-deb/*.deb
           body_path: /tmp/release_body.md
           draft: false
           prerelease: false
@@ -634,3 +714,122 @@ jobs:
           }
           Write-Output "PR submitted to microsoft/winget-pkgs!"
           Write-Output "Track at: https://github.com/microsoft/winget-pkgs/pulls?q=is%3Apr+psmux.TerminalMap"
+
+  # ------------------------------------------------------------------
+  # 7. Publish to APT repository (Debian/Ubuntu)
+  # ------------------------------------------------------------------
+  publish-apt:
+    name: Publish to APT Repository
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for release assets to stabilize on GitHub CDN
+        run: |
+          echo "Waiting 60s for GitHub release CDN propagation..."
+          sleep 60
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          tag="${{ github.ref_name }}"
+          ver="${tag#v}"
+          echo "VERSION=$ver" >> $GITHUB_OUTPUT
+          echo "TAG=$tag" >> $GITHUB_OUTPUT
+
+      - name: Download .deb from GitHub Release
+        run: |
+          tag="${{ github.ref_name }}"
+          ver="${tag#v}"
+          repo="${{ github.repository }}"
+          # cargo-deb names it terminalmap_VERSION_amd64.deb
+          deb_url="https://github.com/$repo/releases/download/$tag/terminalmap_${ver}_amd64.deb"
+          echo "Downloading $deb_url"
+          for i in 1 2 3 4 5; do
+            if curl -sL -o "terminalmap_${ver}_amd64.deb" "$deb_url"; then break; fi
+            echo "Retry $i..."
+            sleep $((i * 10))
+          done
+          ls -la *.deb
+          dpkg-deb --info "terminalmap_${ver}_amd64.deb"
+
+      - name: Import GPG signing key
+        run: |
+          echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format long
+
+      - name: Clone apt-repo
+        run: |
+          git clone https://x-access-token:${{ secrets.WINGET_GH_PAT }}@github.com/psmux/apt-repo.git apt-repo
+          cd apt-repo
+          git checkout gh-pages
+
+      - name: Add .deb to pool and rebuild repo metadata
+        run: |
+          set -e
+          ver="${{ steps.version.outputs.VERSION }}"
+
+          # Copy .deb into pool
+          mkdir -p apt-repo/pool/main
+          cp "terminalmap_${ver}_amd64.deb" apt-repo/pool/main/
+
+          cd apt-repo
+
+          # Generate Packages file
+          mkdir -p dists/stable/main/binary-amd64
+          dpkg-scanpackages --multiversion pool/main /dev/null > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+
+          # Generate Release file
+          cd dists/stable
+          cat > Release <<EOF
+          Origin: psmux
+          Label: TerminalMap
+          Suite: stable
+          Codename: stable
+          Architectures: amd64
+          Components: main
+          Description: APT repository for TerminalMap
+          EOF
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Release
+
+          # Add checksums
+          {
+            echo "MD5Sum:"
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+              if [ -f "$f" ]; then
+                size=$(stat -c%s "$f")
+                md5=$(md5sum "$f" | awk '{print $1}')
+                printf " %s %16d %s\n" "$md5" "$size" "$f"
+              fi
+            done
+            echo "SHA256:"
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+              if [ -f "$f" ]; then
+                size=$(stat -c%s "$f")
+                sha=$(sha256sum "$f" | awk '{print $1}')
+                printf " %s %16d %s\n" "$sha" "$size" "$f"
+              fi
+            done
+          } >> Release
+
+          # Sign the Release file
+          gpg --batch --yes --default-key D4BC229564FEC357 -abs -o Release.gpg Release
+          gpg --batch --yes --default-key D4BC229564FEC357 --clearsign -o InRelease Release
+
+          echo "Release file:"
+          cat Release
+          echo ""
+          echo "GPG signature verified:"
+          gpg --verify Release.gpg Release
+
+      - name: Push updated apt-repo
+        run: |
+          cd apt-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Add terminalmap ${{ steps.version.outputs.VERSION }}"
+          git push

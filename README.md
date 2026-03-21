@@ -80,6 +80,14 @@ scoop bucket add terminalmap https://github.com/psmux/scoop-terminalmap
 scoop install terminalmap
 ```
 
+#### APT (Debian/Ubuntu)
+
+```bash
+curl -fsSL https://psmux.github.io/apt-repo/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/terminalmap.gpg
+echo "deb [signed-by=/usr/share/keyrings/terminalmap.gpg] https://psmux.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/terminalmap.list
+sudo apt update && sudo apt install terminalmap
+```
+
 #### From source
 
 ```bash
