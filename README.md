@@ -73,6 +73,13 @@ choco install terminalmap
 winget install psmux.TerminalMap
 ```
 
+#### Scoop (Windows)
+
+```powershell
+scoop bucket add terminalmap https://github.com/psmux/scoop-terminalmap
+scoop install terminalmap
+```
+
 #### From source
 
 ```bash

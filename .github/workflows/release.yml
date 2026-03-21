@@ -1,27 +1,28 @@
 name: Release and Publish
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
 
+# Prevent duplicate runs from overwriting release assets / submitting duplicate PRs
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: terminalmap
 
 jobs:
   # ------------------------------------------------------------------
-  # 1. Build the Windows release binary and upload to the GitHub release
+  # 1. Build Windows release binary
   # ------------------------------------------------------------------
   build:
-    name: Build Windows binary
+    name: Build Windows x64
     runs-on: windows-latest
-    outputs:
-      version: ${{ steps.meta.outputs.version }}
-      zip_name: ${{ steps.meta.outputs.zip_name }}
-      sha256: ${{ steps.checksum.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,163 +40,597 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Extract version from tag
-        id: meta
-        shell: pwsh
-        run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          $version = $tag -replace '^v', ''
-          echo "version=$version" >> $env:GITHUB_OUTPUT
-          echo "zip_name=terminalmap-$version-windows-x86_64.zip" >> $env:GITHUB_OUTPUT
-
       - name: Build release binary
         run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Verify binary exists
+        shell: pwsh
+        run: |
+          $exe = "target\x86_64-pc-windows-msvc\release\terminalmap.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "FATAL: Expected binary '$exe' not found! Build may have failed silently."
+            Get-ChildItem "target\x86_64-pc-windows-msvc\release" -Filter "*.exe" |
+              ForEach-Object { Write-Output "  Found: $($_.FullName) ($($_.Length) bytes)" }
+            exit 1
+          }
+          $sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 2)
+          Write-Output "Binary: $exe ($sizeMB MB)"
 
       - name: Create release zip
         shell: pwsh
         run: |
-          $zip = "${{ steps.meta.outputs.zip_name }}"
-          Copy-Item "target\x86_64-pc-windows-msvc\release\terminalmap.exe" "terminalmap.exe"
-          Copy-Item "LICENSE" "LICENSE"
-          Copy-Item "README.md" "README.md"
-          Compress-Archive -Path "terminalmap.exe","LICENSE","README.md" -DestinationPath $zip
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ github.ref_name }}"
+          $zipName = "terminalmap-$tag-windows-x64"
 
-      - name: Compute SHA256 checksum
-        id: checksum
-        shell: pwsh
-        run: |
-          $zip = "${{ steps.meta.outputs.zip_name }}"
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          echo "sha256=$hash" >> $env:GITHUB_OUTPUT
-          "$hash  $zip" | Out-File -Encoding ascii -FilePath "$zip.sha256"
+          New-Item -ItemType Directory -Path $zipName -Force
+          Copy-Item "target\x86_64-pc-windows-msvc\release\terminalmap.exe" "$zipName\terminalmap.exe" -ErrorAction Stop
+          Copy-Item "LICENSE" "$zipName\" -ErrorAction Stop
+          Copy-Item "README.md" "$zipName\" -ErrorAction Stop
+          Compress-Archive -Path "$zipName\*" -DestinationPath "$zipName.zip"
 
-      - name: Upload assets to GitHub release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $zip = "${{ steps.meta.outputs.zip_name }}"
-          gh release upload "${{ github.event.release.tag_name }}" $zip "$zip.sha256" --clobber
+          # Verify zip contents
+          $entries = [System.IO.Compression.ZipFile]::OpenRead("$zipName.zip").Entries.Name
+          if ("terminalmap.exe" -notin $entries) {
+            Write-Error "FATAL: 'terminalmap.exe' missing from zip archive!"
+            exit 1
+          }
+          Write-Output "Zip contains: $($entries -join ', ')"
 
-      - name: Upload zip artifact for downstream jobs
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-zip
-          path: ${{ steps.meta.outputs.zip_name }}
+          name: terminalmap-windows-x64
+          path: terminalmap-*-windows-x64.zip
 
   # ------------------------------------------------------------------
-  # 2. Publish to crates.io
+  # 2. Create GitHub Release with changelog
+  # ------------------------------------------------------------------
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found, generating changelog from all commits"
+            LOG=$(git log --pretty=format:"- %s (%h)" --no-merges "$CURRENT_TAG")
+          else
+            echo "Generating changelog: $PREV_TAG to $CURRENT_TAG"
+            LOG=$(git log --pretty=format:"- %s (%h)" --no-merges "${PREV_TAG}..${CURRENT_TAG}")
+          fi
+
+          echo "$LOG" > /tmp/changelog.md
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      - name: Build release body
+        id: body
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+          PREV_TAG="${{ steps.changelog.outputs.prev_tag }}"
+
+          {
+            echo "## TerminalMap ${CURRENT_TAG}"
+            echo ""
+            echo "High precision terminal map viewer and reusable TUI map SDK. Renders OpenStreetMap vector tiles using braille characters."
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "### Changelog (${PREV_TAG} to ${CURRENT_TAG})"
+            else
+              echo "### Changelog"
+            fi
+            echo ""
+            cat /tmp/changelog.md
+            echo ""
+            echo ""
+            echo "### Downloads"
+            echo ""
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            echo "| Windows x64 (Intel/AMD 64 bit) | \`terminalmap-${CURRENT_TAG}-windows-x64.zip\` |"
+            echo ""
+            echo "### Installation"
+            echo ""
+            echo "**Via Cargo (Rust):**"
+            echo "\`\`\`bash"
+            echo "cargo install terminalmap"
+            echo "\`\`\`"
+            echo ""
+            echo "**Via Chocolatey:**"
+            echo "\`\`\`powershell"
+            echo "choco install terminalmap"
+            echo "\`\`\`"
+            echo ""
+            echo "**Via WinGet:**"
+            echo "\`\`\`powershell"
+            echo "winget install psmux.TerminalMap"
+            echo "\`\`\`"
+            echo ""
+            echo "**Via Scoop:**"
+            echo "\`\`\`powershell"
+            echo "scoop bucket add terminalmap https://github.com/psmux/scoop-terminalmap"
+            echo "scoop install terminalmap"
+            echo "\`\`\`"
+          } > /tmp/release_body.md
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: List artifacts
+        run: find . -type f -name "*.zip"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            terminalmap-windows-x64/*.zip
+          body_path: /tmp/release_body.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # 3. Publish to crates.io
   # ------------------------------------------------------------------
   publish-crates:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
-    needs: build
+    needs: release
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Verify crate compiles
+        run: |
+          cargo check 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Crate fails to compile! Fix before publishing."
+            exit 1
+          }
+        shell: pwsh
+
       - name: Publish to crates.io
+        shell: pwsh
+        run: |
+          cargo publish --allow-dirty
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "terminalmap publish failed!"
+            exit 1
+          }
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --no-verify
 
   # ------------------------------------------------------------------
-  # 3. Publish to Chocolatey
+  # 4. Publish to Chocolatey
   # ------------------------------------------------------------------
-  publish-choco:
+  publish-chocolatey:
     name: Publish to Chocolatey
+    needs: release
     runs-on: windows-latest
-    needs: build
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download release zip artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-zip
-
-      - name: Prepare Chocolatey package
-        shell: pwsh
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
-          SHA256: ${{ needs.build.outputs.sha256 }}
-          ZIP_NAME: ${{ needs.build.outputs.zip_name }}
-        run: |
-          $downloadUrl = "https://github.com/psmux/TerminalMap/releases/download/v$env:VERSION/$env:ZIP_NAME"
-
-          # Patch the nuspec with the real version
-          $nuspec = Get-Content "choco\terminalmap.nuspec" -Raw
-          $nuspec = $nuspec -replace '\$version\$', $env:VERSION
-          Set-Content "choco\terminalmap.nuspec" $nuspec -Encoding utf8
-
-          # Patch chocolateyInstall.ps1 with the real URL and checksum
-          $install = Get-Content "choco\tools\chocolateyInstall.ps1" -Raw
-          $install = $install -replace '\$env:CHOCO_PKG_URL', "'$downloadUrl'"
-          $install = $install -replace '\$env:CHOCO_PKG_CHECKSUM', "'$env:SHA256'"
-          Set-Content "choco\tools\chocolateyInstall.ps1" $install -Encoding utf8
-
-      - name: Build Chocolatey package
+      - name: Wait for release assets to stabilize on GitHub CDN
         shell: pwsh
         run: |
-          choco pack "choco\terminalmap.nuspec" --output-directory "choco"
+          Write-Output "Waiting 60s for GitHub release CDN propagation..."
+          Start-Sleep 60
 
-      - name: Push to Chocolatey
+      - name: Extract version from tag
+        id: version
         shell: pwsh
-        env:
-          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: |
-          $nupkg = Get-ChildItem "choco\*.nupkg" | Select-Object -First 1
-          choco push $nupkg.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag -replace '^v', ''
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+          Write-Output "Version: $ver  Tag: $tag"
+
+      - name: Download release zip from GitHub Release
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.TAG }}"
+          $zipUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/terminalmap-$tag-windows-x64.zip"
+          Write-Output "Downloading $zipUrl"
+          $ok = $false
+          for ($i = 1; $i -le 5; $i++) {
+            try {
+              Invoke-WebRequest -Uri $zipUrl -OutFile "terminalmap-release.zip" -UseBasicParsing -ErrorAction Stop
+              $ok = $true; break
+            } catch {
+              if ($i -eq 5) { throw }
+              Write-Output "Retry $i..."
+              Start-Sleep ($i * 10)
+            }
+          }
+
+      - name: Compute SHA256 checksum
+        id: checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "terminalmap-release.zip" -Algorithm SHA256).Hash
+          echo "SHA256=$hash" >> $env:GITHUB_OUTPUT
+          Write-Output "SHA256: $hash"
+
+      - name: Verify checksum (download again and compare)
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.TAG }}"
+          $zipUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/terminalmap-$tag-windows-x64.zip"
+          Invoke-WebRequest -Uri $zipUrl -OutFile "terminalmap-verify.zip" -UseBasicParsing
+          $hash1 = (Get-FileHash "terminalmap-release.zip" -Algorithm SHA256).Hash
+          $hash2 = (Get-FileHash "terminalmap-verify.zip" -Algorithm SHA256).Hash
+          if ($hash1 -ne $hash2) {
+            Write-Error "Checksum mismatch! $hash1 vs $hash2"
+            exit 1
+          }
+          Write-Output "Checksum verified: $hash1"
+
+      - name: Build and push Chocolatey package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          $tag = "${{ steps.version.outputs.TAG }}"
+          $hash = "${{ steps.checksum.outputs.SHA256 }}"
+          $url = "https://github.com/${{ github.repository }}/releases/download/$tag/terminalmap-$tag-windows-x64.zip"
+          $utf8 = New-Object System.Text.UTF8Encoding $false
+
+          New-Item -ItemType Directory -Path "choco-pkg/tools" -Force | Out-Null
+
+          # --- chocolateyinstall.ps1 ---
+          $install = @(
+            '$ErrorActionPreference = ''Stop'''
+            ''
+            '$toolsDir = "$(Split-Path -Parent $MyInvocation.MyCommand.Definition)"'
+            ('$url64 = ''{0}''' -f $url)
+            ''
+            '$packageArgs = @{'
+            '  packageName    = $env:ChocolateyPackageName'
+            '  unzipLocation  = $toolsDir'
+            '  url64bit       = $url64'
+            ('  checksum64     = ''{0}''' -f $hash)
+            '  checksumType64 = ''sha256'''
+            '}'
+            ''
+            'Install-ChocolateyZipPackage @packageArgs'
+            ''
+            '$tmPath = Join-Path $toolsDir "terminalmap.exe"'
+            'Install-BinFile -Name "terminalmap" -Path $tmPath'
+          ) -join "`n"
+          [IO.File]::WriteAllText("$PWD/choco-pkg/tools/chocolateyinstall.ps1", $install, $utf8)
+
+          # --- chocolateyuninstall.ps1 ---
+          $uninstall = @(
+            'Uninstall-BinFile -Name "terminalmap"'
+          ) -join "`n"
+          [IO.File]::WriteAllText("$PWD/choco-pkg/tools/chocolateyuninstall.ps1", $uninstall, $utf8)
+
+          # --- nuspec ---
+          $nuspec = @(
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">'
+            '  <metadata>'
+            '    <id>terminalmap</id>'
+            ('    <version>{0}</version>' -f $ver)
+            '    <title>TerminalMap</title>'
+            '    <authors>psmux</authors>'
+            '    <owners>psmux</owners>'
+            '    <licenseUrl>https://github.com/psmux/TerminalMap/blob/master/LICENSE</licenseUrl>'
+            '    <projectUrl>https://github.com/psmux/TerminalMap</projectUrl>'
+            '    <requireLicenseAcceptance>false</requireLicenseAcceptance>'
+            '    <description>High precision terminal map viewer and reusable TUI map SDK. Renders OpenStreetMap vector tiles using Unicode braille characters. Works offline at low zoom. No API keys required.</description>'
+            '    <summary>Terminal map viewer with braille rendering</summary>'
+            '    <releaseNotes>https://github.com/psmux/TerminalMap/releases</releaseNotes>'
+            '    <tags>terminal map tui openstreetmap braille rust cli visualization</tags>'
+            '    <packageSourceUrl>https://github.com/psmux/TerminalMap</packageSourceUrl>'
+            '    <docsUrl>https://github.com/psmux/TerminalMap#readme</docsUrl>'
+            '    <bugTrackerUrl>https://github.com/psmux/TerminalMap/issues</bugTrackerUrl>'
+            '  </metadata>'
+            '  <files>'
+            '    <file src="tools\**" target="tools" />'
+            '  </files>'
+            '</package>'
+          ) -join "`n"
+          [IO.File]::WriteAllText("$PWD/choco-pkg/terminalmap.nuspec", $nuspec, $utf8)
+
+          # --- Pack and push ---
+          cd choco-pkg
+          choco pack terminalmap.nuspec
+          $nupkg = (Get-ChildItem *.nupkg)[0].Name
+          Write-Output "Packed: $nupkg"
+          choco push $nupkg --source https://push.chocolatey.org/ --api-key ${{ secrets.CHOCO_API_KEY }}
+          Write-Output "Successfully pushed $nupkg to Chocolatey"
 
   # ------------------------------------------------------------------
-  # 4. Publish to winget (microsoft/winget-pkgs)
+  # 5. Publish to Scoop
+  # ------------------------------------------------------------------
+  publish-scoop:
+    name: Publish to Scoop Bucket
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for release assets to stabilize on GitHub CDN
+        run: |
+          echo "Waiting 60s for GitHub release CDN propagation..."
+          sleep 60
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          tag="${{ github.ref_name }}"
+          ver="${tag#v}"
+          echo "VERSION=$ver" >> $GITHUB_OUTPUT
+          echo "TAG=$tag" >> $GITHUB_OUTPUT
+
+      - name: Download release zip and compute SHA256
+        id: hashes
+        shell: bash
+        run: |
+          tag="${{ github.ref_name }}"
+          repo="${{ github.repository }}"
+          base="https://github.com/$repo/releases/download/$tag"
+
+          url="$base/terminalmap-$tag-windows-x64.zip"
+          echo "Downloading $url"
+          for i in 1 2 3 4 5; do
+            if curl -sL -o "installer-x64.zip" "$url"; then break; fi
+            echo "Retry $i..."
+            sleep $((i * 10))
+          done
+          hash=$(sha256sum "installer-x64.zip" | awk '{print $1}')
+          echo "SHA256_X64=$hash" >> $GITHUB_OUTPUT
+          echo "  x64: $hash"
+
+      - name: Clone scoop bucket repo
+        shell: bash
+        run: |
+          git clone https://x-access-token:${{ secrets.WINGET_GH_PAT }}@github.com/psmux/scoop-terminalmap.git scoop-bucket
+
+      - name: Update scoop manifest
+        shell: bash
+        run: |
+          ver="${{ steps.version.outputs.VERSION }}"
+          tag="${{ steps.version.outputs.TAG }}"
+          sha64="${{ steps.hashes.outputs.SHA256_X64 }}"
+          repo="${{ github.repository }}"
+          base="https://github.com/$repo/releases/download/$tag"
+
+          mkdir -p scoop-bucket/bucket
+
+          cat > scoop-bucket/bucket/terminalmap.json << MANIFEST
+          {
+              "version": "$ver",
+              "description": "High precision terminal map viewer. Renders OpenStreetMap vector tiles using braille characters.",
+              "homepage": "https://github.com/psmux/TerminalMap",
+              "license": "MIT",
+              "architecture": {
+                  "64bit": {
+                      "url": "$base/terminalmap-$tag-windows-x64.zip",
+                      "hash": "$sha64"
+                  }
+              },
+              "bin": [
+                  "terminalmap.exe"
+              ],
+              "checkver": {
+                  "github": "https://github.com/psmux/TerminalMap"
+              },
+              "autoupdate": {
+                  "architecture": {
+                      "64bit": {
+                          "url": "https://github.com/psmux/TerminalMap/releases/download/v\$version/terminalmap-v\$version-windows-x64.zip"
+                      }
+                  }
+              }
+          }
+          MANIFEST
+
+          # Clean up heredoc indentation
+          cd scoop-bucket
+          python3 -c "
+          import json
+          with open('bucket/terminalmap.json') as f:
+              data = json.load(f)
+          with open('bucket/terminalmap.json', 'w', newline='\n') as f:
+              json.dump(data, f, indent=4)
+              f.write('\n')
+          "
+
+      - name: Push updated manifest to scoop bucket
+        shell: bash
+        run: |
+          cd scoop-bucket
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/terminalmap.json
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Update terminalmap to ${{ steps.version.outputs.VERSION }}"
+          git push
+
+  # ------------------------------------------------------------------
+  # 6. Publish to WinGet
   # ------------------------------------------------------------------
   publish-winget:
-    name: Publish to winget
+    name: Publish to WinGet
+    needs: release
     runs-on: windows-latest
-    needs: build
     steps:
-      - name: Install wingetcreate
+      - name: Wait for release assets to stabilize on GitHub CDN
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://aka.ms/wingetcreate/latest" -OutFile wingetcreate.exe
+          Write-Output "Waiting 90s for GitHub release CDN propagation..."
+          Start-Sleep 90
 
-      - name: Submit to winget
+      - name: Extract version from tag
+        id: version
         shell: pwsh
-        env:
-          WINGET_GH_PAT: ${{ secrets.WINGET_GH_PAT }}
-          VERSION: ${{ needs.build.outputs.version }}
-          ZIP_NAME: ${{ needs.build.outputs.zip_name }}
         run: |
-          $downloadUrl = "https://github.com/psmux/TerminalMap/releases/download/v$env:VERSION/$env:ZIP_NAME"
-          .\wingetcreate.exe update psmux.TerminalMap `
-            --submit `
-            --version $env:VERSION `
-            --urls $downloadUrl `
-            --token $env:WINGET_GH_PAT
-        # Note: The first submission requires 'wingetcreate new' instead of 'update'.
-        # The workflow below handles both cases.
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag -replace '^v', ''
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+          Write-Output "Version: $ver  Tag: $tag"
 
-      - name: Submit new manifest if update fails
-        if: failure()
+      - name: Download release zip and compute SHA256
+        id: hashes
         shell: pwsh
-        env:
-          WINGET_GH_PAT: ${{ secrets.WINGET_GH_PAT }}
-          VERSION: ${{ needs.build.outputs.version }}
-          ZIP_NAME: ${{ needs.build.outputs.zip_name }}
         run: |
-          $downloadUrl = "https://github.com/psmux/TerminalMap/releases/download/v$env:VERSION/$env:ZIP_NAME"
-          .\wingetcreate.exe new $downloadUrl `
-            --submit `
-            --version $env:VERSION `
-            --name "TerminalMap" `
-            --publisher "psmux" `
-            --package-identifier "psmux.TerminalMap" `
-            --license "MIT" `
-            --license-url "https://github.com/psmux/TerminalMap/blob/master/LICENSE" `
-            --homepage "https://github.com/psmux/TerminalMap" `
-            --description "High precision terminal map viewer. Renders OpenStreetMap vector tiles using braille characters." `
-            --short-description "Terminal map viewer with braille rendering" `
-            --token $env:WINGET_GH_PAT
+          $tag  = "${{ steps.version.outputs.TAG }}"
+          $repo = "${{ github.repository }}"
+          $base = "https://github.com/$repo/releases/download/$tag"
+
+          $url  = "$base/terminalmap-$tag-windows-x64.zip"
+          $file = "installer-x64.zip"
+          Write-Output "Downloading $url ..."
+          $ok = $false
+          for ($i = 1; $i -le 5; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $file -UseBasicParsing -ErrorAction Stop
+              $ok = $true; break
+            } catch {
+              if ($i -eq 5) { throw }
+              Start-Sleep ($i * 10)
+            }
+          }
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+          Write-Output "  SHA256 (x64): $hash"
+          echo "SHA256_X64=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Verify SHA256 checksum (re-download and compare)
+        shell: pwsh
+        run: |
+          $tag  = "${{ steps.version.outputs.TAG }}"
+          $repo = "${{ github.repository }}"
+          $base = "https://github.com/$repo/releases/download/$tag"
+          $url   = "$base/terminalmap-$tag-windows-x64.zip"
+          $orig  = "installer-x64.zip"
+          $verify = "verify-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile $verify -UseBasicParsing
+          $h1 = (Get-FileHash $orig   -Algorithm SHA256).Hash
+          $h2 = (Get-FileHash $verify -Algorithm SHA256).Hash
+          if ($h1 -ne $h2) {
+            Write-Error "SHA256 mismatch! orig=$h1 verify=$h2"
+            exit 1
+          }
+          Write-Output "Verified x64: $h1"
+
+      - name: Download wingetcreate
+        shell: pwsh
+        run: |
+          $wgcPath = "$env:TEMP\wingetcreate.exe"
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile $wgcPath -UseBasicParsing
+          Write-Output "WGC_PATH=$wgcPath" >> $env:GITHUB_ENV
+          Write-Output "Downloaded wingetcreate to $wgcPath"
+
+      - name: Create WinGet manifests
+        shell: pwsh
+        run: |
+          $ver  = "${{ steps.version.outputs.VERSION }}"
+          $tag  = "${{ steps.version.outputs.TAG }}"
+          $repo = "${{ github.repository }}"
+          $base = "https://github.com/$repo/releases/download/$tag"
+
+          $pkgId  = "psmux.TerminalMap"
+          $outDir = "winget-manifests"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          $sha64   = "${{ steps.hashes.outputs.SHA256_X64 }}"
+          $url64   = "$base/terminalmap-$tag-windows-x64.zip"
+
+          # ---- Version manifest ----
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json
+          PackageIdentifier: $pkgId
+          PackageVersion: $ver
+          DefaultLocale: en-US
+          ManifestType: version
+          ManifestVersion: 1.9.0
+          "@ -replace '(?m)^\s{10}','' | Set-Content "$outDir/$pkgId.yaml" -Encoding utf8NoBOM
+
+          # ---- Installer manifest ----
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+          PackageIdentifier: $pkgId
+          PackageVersion: $ver
+          Platform:
+          - Windows.Desktop
+          MinimumOSVersion: 10.0.0.0
+          InstallerType: zip
+          NestedInstallerType: portable
+          NestedInstallerFiles:
+          - RelativeFilePath: terminalmap.exe
+            PortableCommandAlias: terminalmap
+          Installers:
+          - Architecture: x64
+            InstallerUrl: $url64
+            InstallerSha256: $sha64
+          ManifestType: installer
+          ManifestVersion: 1.9.0
+          "@ -replace '(?m)^\s{10}','' | Set-Content "$outDir/$pkgId.installer.yaml" -Encoding utf8NoBOM
+
+          # ---- Default locale manifest ----
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+          PackageIdentifier: $pkgId
+          PackageVersion: $ver
+          PackageLocale: en-US
+          Publisher: psmux
+          PublisherUrl: https://github.com/psmux
+          PublisherSupportUrl: https://github.com/psmux/TerminalMap/issues
+          PackageName: TerminalMap
+          PackageUrl: https://github.com/psmux/TerminalMap
+          License: MIT
+          LicenseUrl: https://github.com/psmux/TerminalMap/blob/master/LICENSE
+          Copyright: Copyright (c) psmux
+          ShortDescription: High precision terminal map viewer with braille rendering
+          Description: |-
+            TerminalMap is a high precision, interactive map viewer and embeddable Rust SDK
+            that turns OpenStreetMap vector tiles into beautiful braille/ASCII art, right in
+            any terminal. Works offline at low zoom. No API keys required.
+          Moniker: terminalmap
+          Tags:
+          - terminal
+          - map
+          - tui
+          - openstreetmap
+          - braille
+          - rust
+          - cli
+          - visualization
+          ReleaseNotesUrl: https://github.com/psmux/TerminalMap/releases/tag/$tag
+          ManifestType: defaultLocale
+          ManifestVersion: 1.9.0
+          "@ -replace '(?m)^\s{10}','' | Set-Content "$outDir/$pkgId.locale.en-US.yaml" -Encoding utf8NoBOM
+
+          Write-Output "Manifests created:"
+          Get-ChildItem $outDir | ForEach-Object {
+            Write-Output "  $($_.Name)"
+            Get-Content $_.FullName | ForEach-Object { Write-Output "    $_" }
+            Write-Output ""
+          }
+
+      - name: Submit manifests to WinGet (PR to microsoft/winget-pkgs)
+        shell: pwsh
+        run: |
+          # submit validates manifests internally before creating the PR
+          & $env:WGC_PATH submit "winget-manifests" --token "${{ secrets.WINGET_GH_PAT }}" 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "wingetcreate submit failed (exit $LASTEXITCODE)."
+            exit 1
+          }
+          Write-Output "PR submitted to microsoft/winget-pkgs!"
+          Write-Output "Track at: https://github.com/microsoft/winget-pkgs/pulls?q=is%3Apr+psmux.TerminalMap"
