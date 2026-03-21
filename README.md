@@ -4,13 +4,7 @@
 
 Works offline at low zoom. No API keys required. No external dependencies beyond a terminal.
 
-```
-⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⣴⠊⡸⠤⢤⠉⢑⡏⢆⡸⠀⠣⣤⣄
-⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡻⢿⢳⠀⠀⢧⢾⡟⢺Sweden
-⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡓⡟⢿⠒⢒⣾⣾⣿⠃⢹⣿
-⣿⣿⣿⣿⣿⣿⣿⣿⣿United Kingdom⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡧⢾⣶⣿⣦⣾⣿⣿⣿⣿
-⣿⣿⣿⣿⣿⣿⣿⣻⣧⡟⣉⣹⣿⣿⣿⠃⠀⠀⠀⠀⠈⠁⠈⣿⣿⣿⣿⠏⢿⠄⢺⡠⣤⣦⠀⠀⢿⠈⡇⠰⠆⢱⠉⣎⠀Poland
-```
+![TerminalMap world view](screenshot.png)
 
 ## What is this
 
