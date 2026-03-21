@@ -1,0 +1,115 @@
+name: Fix APT Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: read
+
+jobs:
+  publish-apt:
+    name: Publish to APT Repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download .deb from GitHub Release
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          repo="${{ github.repository }}"
+          deb_name=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name | select(endswith(".deb"))')
+          if [ -z "$deb_name" ]; then
+            echo "FATAL: No .deb asset found in release $tag"
+            exit 1
+          fi
+          echo "Found .deb asset: $deb_name"
+          gh release download "$tag" --repo "$repo" --pattern "*.deb"
+          ls -la *.deb
+          dpkg-deb --info "$deb_name"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Import GPG signing key
+        run: |
+          echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format long
+
+      - name: Clone apt-repo
+        run: |
+          git clone https://x-access-token:${{ secrets.WINGET_GH_PAT }}@github.com/psmux/apt-repo.git apt-repo
+          cd apt-repo
+          git checkout gh-pages
+
+      - name: Add .deb to pool and rebuild repo metadata
+        run: |
+          set -e
+          tag="${{ github.event.inputs.tag }}"
+          ver="${tag#v}"
+
+          deb_file=$(ls *.deb 2>/dev/null | head -1)
+          if [ -z "$deb_file" ]; then
+            echo "FATAL: No .deb file found"
+            exit 1
+          fi
+          echo "Using .deb: $deb_file"
+
+          mkdir -p apt-repo/pool/main
+          cp "$deb_file" apt-repo/pool/main/
+
+          cd apt-repo
+
+          mkdir -p dists/stable/main/binary-amd64
+          dpkg-scanpackages --multiversion pool/main /dev/null > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+
+          cd dists/stable
+          cat > Release <<EOF
+          Origin: psmux
+          Label: TerminalMap
+          Suite: stable
+          Codename: stable
+          Architectures: amd64
+          Components: main
+          Description: APT repository for TerminalMap
+          EOF
+
+          sed -i 's/^          //' Release
+
+          {
+            echo "MD5Sum:"
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+              if [ -f "$f" ]; then
+                size=$(stat -c%s "$f")
+                md5=$(md5sum "$f" | awk '{print $1}')
+                printf " %s %16d %s\n" "$md5" "$size" "$f"
+              fi
+            done
+            echo "SHA256:"
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+              if [ -f "$f" ]; then
+                size=$(stat -c%s "$f")
+                sha=$(sha256sum "$f" | awk '{print $1}')
+                printf " %s %16d %s\n" "$sha" "$size" "$f"
+              fi
+            done
+          } >> Release
+
+          gpg --batch --yes --default-key D4BC229564FEC357 -abs -o Release.gpg Release
+          gpg --batch --yes --default-key D4BC229564FEC357 --clearsign -o InRelease Release
+
+          echo "Release file:"
+          cat Release
+          gpg --verify Release.gpg Release
+
+      - name: Push updated apt-repo
+        run: |
+          cd apt-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Add terminalmap ${{ github.event.inputs.tag }}"
+          git push
