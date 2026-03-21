@@ -18,18 +18,61 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
-  # 1. Build Windows release binary
+  # 1. Build all platform/arch combinations
   # ------------------------------------------------------------------
   build:
-    name: Build Windows x64
-    runs-on: windows-latest
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact_name: windows-x64
+            binary_ext: .exe
+            archive: zip
+          - name: Windows ARM64
+            target: aarch64-pc-windows-msvc
+            os: windows-latest
+            artifact_name: windows-arm64
+            binary_ext: .exe
+            archive: zip
+          - name: Linux x64
+            target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: linux-x64
+            binary_ext: ""
+            archive: tar.gz
+            deb: true
+          - name: Linux ARM64
+            target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: linux-arm64
+            binary_ext: ""
+            archive: tar.gz
+            deb: true
+            cross: true
+          - name: macOS x64
+            target: x86_64-apple-darwin
+            os: macos-latest
+            artifact_name: macos-x64
+            binary_ext: ""
+            archive: tar.gz
+          - name: macOS ARM64
+            target: aarch64-apple-darwin
+            os: macos-latest
+            artifact_name: macos-arm64
+            binary_ext: ""
+            archive: tar.gz
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
 
       - name: Cache cargo registry and build
         uses: actions/cache@v4
@@ -38,126 +81,76 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build release binary
-        run: cargo build --release --target x86_64-pc-windows-msvc
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Verify binary exists
-        shell: pwsh
+      - name: Install cargo-deb
+        if: matrix.deb
+        run: cargo install cargo-deb
+
+      - name: Build .deb package
+        if: matrix.deb
         run: |
-          $exe = "target\x86_64-pc-windows-msvc\release\terminalmap.exe"
-          if (-not (Test-Path $exe)) {
-            Write-Error "FATAL: Expected binary '$exe' not found! Build may have failed silently."
-            Get-ChildItem "target\x86_64-pc-windows-msvc\release" -Filter "*.exe" |
-              ForEach-Object { Write-Output "  Found: $($_.FullName) ($($_.Length) bytes)" }
-            exit 1
-          }
-          $sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 2)
-          Write-Output "Binary: $exe ($sizeMB MB)"
+          cargo deb --target ${{ matrix.target }} --no-build
+          DEB=$(ls target/${{ matrix.target }}/debian/*.deb)
+          echo "Built: $DEB"
+          dpkg-deb --info "$DEB" || true
 
-      - name: Create release zip
+      - name: Create release zip (Windows)
+        if: matrix.archive == 'zip'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "${{ github.ref_name }}"
-          $zipName = "terminalmap-$tag-windows-x64"
+          $dir = "terminalmap-$tag-${{ matrix.artifact_name }}"
 
-          New-Item -ItemType Directory -Path $zipName -Force
-          Copy-Item "target\x86_64-pc-windows-msvc\release\terminalmap.exe" "$zipName\terminalmap.exe" -ErrorAction Stop
-          Copy-Item "LICENSE" "$zipName\" -ErrorAction Stop
-          Copy-Item "README.md" "$zipName\" -ErrorAction Stop
-          Compress-Archive -Path "$zipName\*" -DestinationPath "$zipName.zip"
+          New-Item -ItemType Directory -Path $dir -Force
+          Copy-Item "target/${{ matrix.target }}/release/terminalmap${{ matrix.binary_ext }}" "$dir/terminalmap${{ matrix.binary_ext }}" -ErrorAction Stop
+          Copy-Item "LICENSE" "$dir/" -ErrorAction Stop
+          Copy-Item "README.md" "$dir/" -ErrorAction Stop
+          Compress-Archive -Path "$dir/*" -DestinationPath "$dir.zip"
+          Write-Output "Created: $dir.zip"
 
-          # Verify zip contents
-          $entries = [System.IO.Compression.ZipFile]::OpenRead("$zipName.zip").Entries.Name
-          if ("terminalmap.exe" -notin $entries) {
-            Write-Error "FATAL: 'terminalmap.exe' missing from zip archive!"
-            exit 1
-          }
-          Write-Output "Zip contains: $($entries -join ', ')"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: terminalmap-windows-x64
-          path: terminalmap-*-windows-x64.zip
-
-  # ------------------------------------------------------------------
-  # 1b. Build Linux release binary + .deb package
-  # ------------------------------------------------------------------
-  build-linux:
-    name: Build Linux x64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-
-      - name: Cache cargo registry and build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
-
-      - name: Build release binary
-        run: cargo build --release --target x86_64-unknown-linux-gnu
-
-      - name: Verify binary exists
-        run: |
-          exe="target/x86_64-unknown-linux-gnu/release/terminalmap"
-          if [ ! -f "$exe" ]; then
-            echo "FATAL: Expected binary '$exe' not found!"
-            ls -la target/x86_64-unknown-linux-gnu/release/ || true
-            exit 1
-          fi
-          size=$(du -h "$exe" | cut -f1)
-          echo "Binary: $exe ($size)"
-
-      - name: Build .deb package
-        run: |
-          cargo deb --target x86_64-unknown-linux-gnu --no-build
-          DEB=$(ls target/x86_64-unknown-linux-gnu/debian/*.deb)
-          echo "Built: $DEB"
-          dpkg-deb --info "$DEB"
-
-      - name: Create release tarball
+      - name: Create release tarball (Linux/macOS)
+        if: matrix.archive == 'tar.gz'
         run: |
           TAG="${{ github.ref_name }}"
-          DIR="terminalmap-$TAG-linux-x64"
+          DIR="terminalmap-$TAG-${{ matrix.artifact_name }}"
           mkdir -p "$DIR"
-          cp target/x86_64-unknown-linux-gnu/release/terminalmap "$DIR/"
+          cp "target/${{ matrix.target }}/release/terminalmap${{ matrix.binary_ext }}" "$DIR/"
           cp LICENSE README.md "$DIR/"
           tar czf "$DIR.tar.gz" "$DIR"
-          echo "Tarball: $DIR.tar.gz"
+          echo "Created: $DIR.tar.gz"
 
-      - name: Upload tarball artifact
+      - name: Upload archive artifact
         uses: actions/upload-artifact@v4
         with:
-          name: terminalmap-linux-x64
-          path: terminalmap-*-linux-x64.tar.gz
+          name: terminalmap-${{ matrix.artifact_name }}
+          path: terminalmap-*-${{ matrix.artifact_name }}.${{ matrix.archive }}
 
       - name: Upload deb artifact
+        if: matrix.deb
         uses: actions/upload-artifact@v4
         with:
-          name: terminalmap-deb
-          path: target/x86_64-unknown-linux-gnu/debian/*.deb
+          name: terminalmap-deb-${{ matrix.artifact_name }}
+          path: target/${{ matrix.target }}/debian/*.deb
 
   # ------------------------------------------------------------------
   # 2. Create GitHub Release with changelog
   # ------------------------------------------------------------------
   release:
     name: Create Release
-    needs: [build, build-linux]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -205,9 +198,14 @@ jobs:
             echo ""
             echo "| Platform | File |"
             echo "|----------|------|"
-            echo "| Windows x64 (Intel/AMD 64 bit) | \`terminalmap-${CURRENT_TAG}-windows-x64.zip\` |"
+            echo "| Windows x64 | \`terminalmap-${CURRENT_TAG}-windows-x64.zip\` |"
+            echo "| Windows ARM64 | \`terminalmap-${CURRENT_TAG}-windows-arm64.zip\` |"
             echo "| Linux x64 (tarball) | \`terminalmap-${CURRENT_TAG}-linux-x64.tar.gz\` |"
-            echo "| Linux x64 (.deb) | \`terminalmap_${CURRENT_TAG#v}_amd64.deb\` |"
+            echo "| Linux ARM64 (tarball) | \`terminalmap-${CURRENT_TAG}-linux-arm64.tar.gz\` |"
+            echo "| macOS x64 (Intel) | \`terminalmap-${CURRENT_TAG}-macos-x64.tar.gz\` |"
+            echo "| macOS ARM64 (Apple Silicon) | \`terminalmap-${CURRENT_TAG}-macos-arm64.tar.gz\` |"
+            echo "| Linux x64 (.deb) | see release assets |"
+            echo "| Linux ARM64 (.deb) | see release assets |"
             echo ""
             echo "### Installation"
             echo ""
@@ -244,15 +242,20 @@ jobs:
         uses: actions/download-artifact@v4
 
       - name: List artifacts
-        run: find . -type f -name "*.zip"
+        run: find . -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" \)
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             terminalmap-windows-x64/*.zip
+            terminalmap-windows-arm64/*.zip
             terminalmap-linux-x64/*.tar.gz
-            terminalmap-deb/*.deb
+            terminalmap-linux-arm64/*.tar.gz
+            terminalmap-macos-x64/*.tar.gz
+            terminalmap-macos-arm64/*.tar.gz
+            terminalmap-deb-linux-x64/*.deb
+            terminalmap-deb-linux-arm64/*.deb
           body_path: /tmp/release_body.md
           draft: false
           prerelease: false
@@ -456,7 +459,7 @@ jobs:
           echo "VERSION=$ver" >> $GITHUB_OUTPUT
           echo "TAG=$tag" >> $GITHUB_OUTPUT
 
-      - name: Download release zip and compute SHA256
+      - name: Download release zips and compute SHA256
         id: hashes
         shell: bash
         run: |
@@ -464,16 +467,19 @@ jobs:
           repo="${{ github.repository }}"
           base="https://github.com/$repo/releases/download/$tag"
 
-          url="$base/terminalmap-$tag-windows-x64.zip"
-          echo "Downloading $url"
-          for i in 1 2 3 4 5; do
-            if curl -sL -o "installer-x64.zip" "$url"; then break; fi
-            echo "Retry $i..."
-            sleep $((i * 10))
+          for arch in x64 arm64; do
+            url="$base/terminalmap-$tag-windows-$arch.zip"
+            echo "Downloading $url"
+            for i in 1 2 3 4 5; do
+              if curl -sL -o "installer-$arch.zip" "$url"; then break; fi
+              echo "Retry $i..."
+              sleep $((i * 10))
+            done
+            hash=$(sha256sum "installer-$arch.zip" | awk '{print $1}')
+            upper_arch=$(echo "$arch" | tr '[:lower:]' '[:upper:]')
+            echo "SHA256_${upper_arch}=$hash" >> $GITHUB_OUTPUT
+            echo "  $arch: $hash"
           done
-          hash=$(sha256sum "installer-x64.zip" | awk '{print $1}')
-          echo "SHA256_X64=$hash" >> $GITHUB_OUTPUT
-          echo "  x64: $hash"
 
       - name: Clone scoop bucket repo
         shell: bash
@@ -486,6 +492,7 @@ jobs:
           ver="${{ steps.version.outputs.VERSION }}"
           tag="${{ steps.version.outputs.TAG }}"
           sha64="${{ steps.hashes.outputs.SHA256_X64 }}"
+          sha_arm64="${{ steps.hashes.outputs.SHA256_ARM64 }}"
           repo="${{ github.repository }}"
           base="https://github.com/$repo/releases/download/$tag"
 
@@ -501,6 +508,10 @@ jobs:
                   "64bit": {
                       "url": "$base/terminalmap-$tag-windows-x64.zip",
                       "hash": "$sha64"
+                  },
+                  "arm64": {
+                      "url": "$base/terminalmap-$tag-windows-arm64.zip",
+                      "hash": "$sha_arm64"
                   }
               },
               "bin": [
@@ -513,6 +524,9 @@ jobs:
                   "architecture": {
                       "64bit": {
                           "url": "https://github.com/psmux/TerminalMap/releases/download/v\$version/terminalmap-v\$version-windows-x64.zip"
+                      },
+                      "arm64": {
+                          "url": "https://github.com/psmux/TerminalMap/releases/download/v\$version/terminalmap-v\$version-windows-arm64.zip"
                       }
                   }
               }
@@ -565,7 +579,7 @@ jobs:
           echo "TAG=$tag" >> $env:GITHUB_OUTPUT
           Write-Output "Version: $ver  Tag: $tag"
 
-      - name: Download release zip and compute SHA256
+      - name: Download release zips and compute SHA256
         id: hashes
         shell: pwsh
         run: |
@@ -573,40 +587,46 @@ jobs:
           $repo = "${{ github.repository }}"
           $base = "https://github.com/$repo/releases/download/$tag"
 
-          $url  = "$base/terminalmap-$tag-windows-x64.zip"
-          $file = "installer-x64.zip"
-          Write-Output "Downloading $url ..."
-          $ok = $false
-          for ($i = 1; $i -le 5; $i++) {
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $file -UseBasicParsing -ErrorAction Stop
-              $ok = $true; break
-            } catch {
-              if ($i -eq 5) { throw }
-              Start-Sleep ($i * 10)
+          foreach ($arch in @("x64", "arm64")) {
+            $url  = "$base/terminalmap-$tag-windows-$arch.zip"
+            $file = "installer-$arch.zip"
+            Write-Output "Downloading $url ..."
+            $ok = $false
+            for ($i = 1; $i -le 5; $i++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $file -UseBasicParsing -ErrorAction Stop
+                $ok = $true; break
+              } catch {
+                if ($i -eq 5) { throw }
+                Start-Sleep ($i * 10)
+              }
             }
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+            $upper = $arch.ToUpper()
+            Write-Output "  SHA256 ($arch): $hash"
+            echo "SHA256_$upper=$hash" >> $env:GITHUB_OUTPUT
           }
-          $hash = (Get-FileHash $file -Algorithm SHA256).Hash
-          Write-Output "  SHA256 (x64): $hash"
-          echo "SHA256_X64=$hash" >> $env:GITHUB_OUTPUT
 
-      - name: Verify SHA256 checksum (re-download and compare)
+      - name: Verify SHA256 checksums (re-download and compare)
         shell: pwsh
         run: |
           $tag  = "${{ steps.version.outputs.TAG }}"
           $repo = "${{ github.repository }}"
           $base = "https://github.com/$repo/releases/download/$tag"
-          $url   = "$base/terminalmap-$tag-windows-x64.zip"
-          $orig  = "installer-x64.zip"
-          $verify = "verify-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile $verify -UseBasicParsing
-          $h1 = (Get-FileHash $orig   -Algorithm SHA256).Hash
-          $h2 = (Get-FileHash $verify -Algorithm SHA256).Hash
-          if ($h1 -ne $h2) {
-            Write-Error "SHA256 mismatch! orig=$h1 verify=$h2"
-            exit 1
+
+          foreach ($arch in @("x64", "arm64")) {
+            $url    = "$base/terminalmap-$tag-windows-$arch.zip"
+            $orig   = "installer-$arch.zip"
+            $verify = "verify-$arch.zip"
+            Invoke-WebRequest -Uri $url -OutFile $verify -UseBasicParsing
+            $h1 = (Get-FileHash $orig   -Algorithm SHA256).Hash
+            $h2 = (Get-FileHash $verify -Algorithm SHA256).Hash
+            if ($h1 -ne $h2) {
+              Write-Error "SHA256 mismatch for $arch! orig=$h1 verify=$h2"
+              exit 1
+            }
+            Write-Output "Verified $arch`: $h1"
           }
-          Write-Output "Verified x64: $h1"
 
       - name: Download wingetcreate
         shell: pwsh
@@ -630,6 +650,8 @@ jobs:
 
           $sha64   = "${{ steps.hashes.outputs.SHA256_X64 }}"
           $url64   = "$base/terminalmap-$tag-windows-x64.zip"
+          $sha_arm = "${{ steps.hashes.outputs.SHA256_ARM64 }}"
+          $url_arm = "$base/terminalmap-$tag-windows-arm64.zip"
 
           # ---- Version manifest ----
           @"
@@ -658,6 +680,9 @@ jobs:
           - Architecture: x64
             InstallerUrl: $url64
             InstallerSha256: $sha64
+          - Architecture: arm64
+            InstallerUrl: $url_arm
+            InstallerSha256: $sha_arm
           ManifestType: installer
           ManifestVersion: 1.9.0
           "@ -replace '(?m)^\s{10}','' | Set-Content "$outDir/$pkgId.installer.yaml" -Encoding utf8NoBOM
@@ -736,20 +761,18 @@ jobs:
           echo "VERSION=$ver" >> $GITHUB_OUTPUT
           echo "TAG=$tag" >> $GITHUB_OUTPUT
 
-      - name: Download .deb from GitHub Release
+      - name: Download .deb files from GitHub Release
         run: |
           tag="${{ github.ref_name }}"
           repo="${{ github.repository }}"
-          # Find the actual .deb asset name (cargo-deb may add revision suffix like -1)
-          deb_name=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name | select(endswith(".deb"))')
-          if [ -z "$deb_name" ]; then
-            echo "FATAL: No .deb asset found in release $tag"
-            exit 1
-          fi
-          echo "Found .deb asset: $deb_name"
+          # Download all .deb assets (amd64 + arm64)
           gh release download "$tag" --repo "$repo" --pattern "*.deb"
+          echo "Downloaded .deb files:"
           ls -la *.deb
-          dpkg-deb --info "$deb_name"
+          for deb in *.deb; do
+            echo "--- $deb ---"
+            dpkg-deb --info "$deb" || true
+          done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -764,29 +787,25 @@ jobs:
           cd apt-repo
           git checkout gh-pages
 
-      - name: Add .deb to pool and rebuild repo metadata
+      - name: Add .deb files to pool and rebuild repo metadata
         run: |
           set -e
-          ver="${{ steps.version.outputs.VERSION }}"
 
-          # Find the .deb file
-          deb_file=$(ls *.deb 2>/dev/null | head -1)
-          if [ -z "$deb_file" ]; then
-            echo "FATAL: No .deb file found in working directory"
-            exit 1
-          fi
-          echo "Using .deb: $deb_file"
-
-          # Copy .deb into pool
+          # Copy all .deb files into pool
           mkdir -p apt-repo/pool/main
-          cp "$deb_file" apt-repo/pool/main/
+          for deb in *.deb; do
+            echo "Adding: $deb"
+            cp "$deb" apt-repo/pool/main/
+          done
 
           cd apt-repo
 
-          # Generate Packages file
-          mkdir -p dists/stable/main/binary-amd64
-          dpkg-scanpackages --multiversion pool/main /dev/null > dists/stable/main/binary-amd64/Packages
-          gzip -k -f dists/stable/main/binary-amd64/Packages
+          # Generate Packages files for each architecture
+          for arch in amd64 arm64; do
+            mkdir -p "dists/stable/main/binary-$arch"
+            dpkg-scanpackages --multiversion --arch "$arch" pool/main /dev/null > "dists/stable/main/binary-$arch/Packages" 2>/dev/null || true
+            gzip -k -f "dists/stable/main/binary-$arch/Packages"
+          done
 
           # Generate Release file
           cd dists/stable
@@ -795,7 +814,7 @@ jobs:
           Label: TerminalMap
           Suite: stable
           Codename: stable
-          Architectures: amd64
+          Architectures: amd64 arm64
           Components: main
           Description: APT repository for TerminalMap
           EOF
@@ -806,7 +825,7 @@ jobs:
           # Add checksums
           {
             echo "MD5Sum:"
-            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz main/binary-arm64/Packages main/binary-arm64/Packages.gz; do
               if [ -f "$f" ]; then
                 size=$(stat -c%s "$f")
                 md5=$(md5sum "$f" | awk '{print $1}')
@@ -814,7 +833,7 @@ jobs:
               fi
             done
             echo "SHA256:"
-            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz main/binary-arm64/Packages main/binary-arm64/Packages.gz; do
               if [ -f "$f" ]; then
                 size=$(stat -c%s "$f")
                 sha=$(sha256sum "$f" | awk '{print $1}')
