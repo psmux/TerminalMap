@@ -17,7 +17,7 @@ ratatui = "0.29"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client for tile fetching
-reqwest = { version = "0.12", features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 # Protobuf decoding for vector tiles
 prost = "0.13"
