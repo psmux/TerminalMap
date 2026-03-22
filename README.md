@@ -105,6 +105,7 @@ cargo run --release
 | z / y / - | Zoom out |
 | c | Toggle braille/ASCII mode |
 | n | Toggle labels on/off |
+| o | Toggle ocean background (fills empty space outside the world map with ocean) |
 | m | Toggle demo markers |
 | g | Start/stop globe tour (auto camera) |
 | t | Start/stop marker tour |
@@ -399,6 +400,7 @@ if map.has_animated_markers() {
 | `fit_world()` | Auto zoom to show all landmass |
 | `toggle_braille()` | Switch between braille and ASCII block rendering |
 | `toggle_labels()` | Toggle country/city/POI labels on/off |
+| `toggle_ocean_background()` | Toggle ocean fill for empty space outside the world map |
 | `footer()` | Get status text with current position and zoom |
 | `add_marker(marker)` | Add a marker to the map |
 | `remove_marker(id)` | Remove a marker by its ID |
@@ -564,6 +566,7 @@ The camera automatically handles all the smooth motion:
 | `label_margin` | `5.0` | Minimum spacing between labels |
 | `poi_marker` | `◉` | Character used for point of interest symbols |
 | `show_labels` | `true` | Show country/city names and POI labels |
+| `ocean_background` | `true` | Fill empty space outside the world map with ocean blue |
 
 ## 🏗️ Architecture
 

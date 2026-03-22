@@ -76,6 +76,20 @@ impl Renderer {
         let world_y1 = (world_y0 as f64 + grid_size * tile_size).ceil() as i32;
         self.world_bounds = (world_x0, world_y0, world_x1, world_y1);
 
+        // Fill area outside the world map with ocean (same pixels as water tiles)
+        if self.config.ocean_background {
+            let ocean_color: u8 = 69; // ANSI 256 color matching #5f87ff water
+            let w = self.width as i32;
+            let h = self.height as i32;
+            for y in 0..h {
+                for x in 0..w {
+                    if x < world_x0 || x >= world_x1 || y < world_y0 || y >= world_y1 {
+                        self.canvas.buffer.set_pixel(x, y, ocean_color);
+                    }
+                }
+            }
+        }
+
         // Fetch tile data
         for tile in &mut tiles {
             if let Ok(data) = self

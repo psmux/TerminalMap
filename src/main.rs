@@ -107,6 +107,10 @@ async fn main() -> anyhow::Result<()> {
                             map.toggle_labels();
                             needs_redraw = true;
                         }
+                        KeyCode::Char('o') => {
+                            map.toggle_ocean_background();
+                            needs_redraw = true;
+                        }
                         KeyCode::Char('w') => {
                             map.fit_world();
                             needs_redraw = true;
@@ -203,7 +207,7 @@ fn print_footer(map: &MapState, stdout: &mut io::Stdout) -> anyhow::Result<()> {
     let (_, rows) = crossterm::terminal::size()?;
 
     // Row 1: help bar
-    let help = "\x1B[90m arrows/hjkl:\x1B[37mPan  \x1B[90ma/z:\x1B[37mZoom  \x1B[90mc:\x1B[37mBraille  \x1B[90mn:\x1B[37mLabels  \x1B[90mm:\x1B[37mMarkers  \x1B[90mg:\x1B[37mGlobe  \x1B[90mt:\x1B[37mTour  \x1B[90mw:\x1B[37mWorld  \x1B[90mq:\x1B[37mQuit\x1B[0m";
+    let help = "\x1B[90m arrows/hjkl:\x1B[37mPan  \x1B[90ma/z:\x1B[37mZoom  \x1B[90mc:\x1B[37mBraille  \x1B[90mn:\x1B[37mLabels  \x1B[90mo:\x1B[37mOcean  \x1B[90mm:\x1B[37mMarkers  \x1B[90mg:\x1B[37mGlobe  \x1B[90mt:\x1B[37mTour  \x1B[90mw:\x1B[37mWorld  \x1B[90mq:\x1B[37mQuit\x1B[0m";
     execute!(stdout, crossterm::cursor::MoveTo(0, rows - 2))?;
     write!(stdout, "\x1B[K{}", help)?;
 

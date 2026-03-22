@@ -101,6 +101,7 @@ impl MapState {
         let mut renderer = self.renderer.lock().await;
         renderer.set_size(self.width, self.height);
         renderer.config.show_labels = self.config.show_labels;
+        renderer.config.ocean_background = self.config.ocean_background;
         renderer
             .draw(self.center_lon, self.center_lat, self.zoom)
             .await?;
@@ -153,6 +154,11 @@ impl MapState {
     /// Toggle map labels (country names, city names, POI markers) on/off
     pub fn toggle_labels(&mut self) {
         self.config.show_labels = !self.config.show_labels;
+    }
+
+    /// Toggle ocean background (blue fill for areas outside the map)
+    pub fn toggle_ocean_background(&mut self) {
+        self.config.ocean_background = !self.config.ocean_background;
     }
 
     /// Zoom and center so all meaningful landmass (72°N to 56°S) fits in the window.

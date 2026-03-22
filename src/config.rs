@@ -17,6 +17,7 @@ pub struct MapConfig {
     pub label_margin: f64,
     pub poi_marker: char,
     pub show_labels: bool,
+    pub ocean_background: bool,
 }
 
 impl Default for MapConfig {
@@ -38,6 +39,7 @@ impl Default for MapConfig {
             label_margin: 5.0,
             poi_marker: '\u{25C9}', // ◉
             show_labels: true,
+            ocean_background: true,
         }
     }
 }
