@@ -397,22 +397,22 @@ impl Renderer {
                     // 3x3 filled dot
                     for dy in -1..=1 {
                         for dx in -1..=1 {
-                            self.canvas.buffer.set_pixel(px + dx, py + dy, color);
+                            self.canvas.buffer.set_pixel_forced(px + dx, py + dy, color);
                         }
                     }
                 }
                 MarkerShape::Cross => {
                     for d in -3..=3 {
-                        self.canvas.buffer.set_pixel(px + d, py, color);
-                        self.canvas.buffer.set_pixel(px, py + d, color);
+                        self.canvas.buffer.set_pixel_forced(px + d, py, color);
+                        self.canvas.buffer.set_pixel_forced(px, py + d, color);
                     }
                 }
                 MarkerShape::Diamond => {
                     for d in 0..=3 {
-                        self.canvas.buffer.set_pixel(px + d, py - 3 + d, color);
-                        self.canvas.buffer.set_pixel(px - d, py - 3 + d, color);
-                        self.canvas.buffer.set_pixel(px + d, py + 3 - d, color);
-                        self.canvas.buffer.set_pixel(px - d, py + 3 - d, color);
+                        self.canvas.buffer.set_pixel_forced(px + d, py - 3 + d, color);
+                        self.canvas.buffer.set_pixel_forced(px - d, py - 3 + d, color);
+                        self.canvas.buffer.set_pixel_forced(px + d, py + 3 - d, color);
+                        self.canvas.buffer.set_pixel_forced(px - d, py + 3 - d, color);
                     }
                 }
                 MarkerShape::Ring(r) => {
@@ -428,7 +428,7 @@ impl Renderer {
                     for dy in -radius..=radius {
                         for dx in -radius..=radius {
                             if dx * dx + dy * dy <= radius * radius {
-                                self.canvas.buffer.set_pixel(px + dx, py + dy, color);
+                                self.canvas.buffer.set_pixel_forced(px + dx, py + dy, color);
                             }
                         }
                     }
@@ -458,14 +458,14 @@ impl Renderer {
         let mut d = 1 - r;
 
         while x >= y {
-            self.canvas.buffer.set_pixel(cx + x, cy + y, color);
-            self.canvas.buffer.set_pixel(cx - x, cy + y, color);
-            self.canvas.buffer.set_pixel(cx + x, cy - y, color);
-            self.canvas.buffer.set_pixel(cx - x, cy - y, color);
-            self.canvas.buffer.set_pixel(cx + y, cy + x, color);
-            self.canvas.buffer.set_pixel(cx - y, cy + x, color);
-            self.canvas.buffer.set_pixel(cx + y, cy - x, color);
-            self.canvas.buffer.set_pixel(cx - y, cy - x, color);
+            self.canvas.buffer.set_pixel_forced(cx + x, cy + y, color);
+            self.canvas.buffer.set_pixel_forced(cx - x, cy + y, color);
+            self.canvas.buffer.set_pixel_forced(cx + x, cy - y, color);
+            self.canvas.buffer.set_pixel_forced(cx - x, cy - y, color);
+            self.canvas.buffer.set_pixel_forced(cx + y, cy + x, color);
+            self.canvas.buffer.set_pixel_forced(cx - y, cy + x, color);
+            self.canvas.buffer.set_pixel_forced(cx + y, cy - x, color);
+            self.canvas.buffer.set_pixel_forced(cx - y, cy - x, color);
             y += 1;
             if d <= 0 {
                 d += 2 * y + 1;

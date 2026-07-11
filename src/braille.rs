@@ -40,6 +40,13 @@ pub struct BrailleBuffer {
     char_buffer: Vec<Option<char>>,
     foreground_buffer: Vec<u8>,
     background_buffer: Vec<u8>,
+    /// Color of each individual pixel; a cell's final color is the majority
+    /// color of its lit pixels so a thin line crossing a filled cell cannot
+    /// recolor the whole cell (prevents e.g. white borders bleeding into ocean)
+    pixel_colors: Vec<u8>,
+    /// Cells whose color was set directly (markers) and must not be
+    /// overridden by the majority vote
+    color_locked: Vec<bool>,
     global_background: Option<u8>,
     ascii_to_braille: Vec<char>,
 }
@@ -54,6 +61,8 @@ impl BrailleBuffer {
             char_buffer: vec![None; size],
             foreground_buffer: vec![0; size],
             background_buffer: vec![0; size],
+            pixel_colors: vec![0; width * height],
+            color_locked: vec![false; size],
             global_background: None,
             ascii_to_braille: Vec::new(),
         };
@@ -66,6 +75,8 @@ impl BrailleBuffer {
         self.char_buffer.fill(None);
         self.foreground_buffer.fill(0);
         self.background_buffer.fill(0);
+        self.pixel_colors.fill(0);
+        self.color_locked.fill(false);
     }
 
     pub fn set_global_background(&mut self, bg: u8) {
@@ -95,7 +106,104 @@ impl BrailleBuffer {
         if idx < self.pixel_buffer.len() {
             self.pixel_buffer[idx] |= mask;
             self.foreground_buffer[idx] = color;
+            self.pixel_colors[y * self.width + x] = color;
         }
+    }
+
+    /// Set a pixel and force its color onto the whole cell, bypassing the
+    /// majority vote. Used for markers which must always be visible on top.
+    pub fn set_pixel_forced(&mut self, x: i32, y: i32, color: u8) {
+        if x < 0 || y < 0 {
+            return;
+        }
+        let ux = x as usize;
+        let uy = y as usize;
+        if ux >= self.width || uy >= self.height {
+            return;
+        }
+        let idx = self.project(ux, uy);
+        if idx < self.pixel_buffer.len() {
+            self.set_pixel(x, y, color);
+            self.color_locked[idx] = true;
+        }
+    }
+
+    /// Resolve the final foreground color of a cell as the majority color of
+    /// its lit pixels. Ties are broken by the lit pixel colors of the eight
+    /// surrounding cells so area fills (like ocean) win over 1px lines.
+    fn resolve_cell_color(&self, cell_x: usize, cell_y: usize) -> u8 {
+        let idx = cell_y * (self.width >> 1) + cell_x;
+        if self.color_locked[idx] {
+            return self.foreground_buffer[idx];
+        }
+        let mut counts: [(u8, u32); 8] = [(0, 0); 8];
+        let mut n = 0usize;
+        let px0 = cell_x * 2;
+        let py0 = cell_y * 4;
+        for dy in 0..4 {
+            for dx in 0..2 {
+                let (px, py) = (px0 + dx, py0 + dy);
+                if px >= self.width || py >= self.height {
+                    continue;
+                }
+                let mask = BRAILLE_MAP[py & 3][px & 1];
+                let cell_idx = self.project(px, py);
+                if self.pixel_buffer[cell_idx] & mask == 0 {
+                    continue;
+                }
+                let c = self.pixel_colors[py * self.width + px];
+                if let Some(slot) = counts[..n].iter_mut().find(|(col, _)| *col == c) {
+                    slot.1 += 1;
+                } else if n < counts.len() {
+                    counts[n] = (c, 1);
+                    n += 1;
+                }
+            }
+        }
+        if n == 0 {
+            return self.foreground_buffer[idx];
+        }
+        let max_count = counts[..n].iter().map(|(_, cnt)| *cnt).max().unwrap_or(0);
+        let tied: Vec<u8> = counts[..n]
+            .iter()
+            .filter(|(_, cnt)| *cnt == max_count)
+            .map(|(col, _)| *col)
+            .collect();
+        if tied.len() == 1 {
+            return tied[0];
+        }
+        // Tie: count lit pixels of each tied color in neighboring cells
+        let cols = self.width >> 1;
+        let rows = self.height >> 2;
+        let mut best = (tied[0], 0u32);
+        for &cand in &tied {
+            let mut score = 0u32;
+            for ny in cell_y.saturating_sub(1)..=(cell_y + 1).min(rows.saturating_sub(1)) {
+                for nx in cell_x.saturating_sub(1)..=(cell_x + 1).min(cols.saturating_sub(1)) {
+                    if nx == cell_x && ny == cell_y {
+                        continue;
+                    }
+                    for dy in 0..4 {
+                        for dx in 0..2 {
+                            let (px, py) = (nx * 2 + dx, ny * 4 + dy);
+                            if px >= self.width || py >= self.height {
+                                continue;
+                            }
+                            let mask = BRAILLE_MAP[py & 3][px & 1];
+                            if self.pixel_buffer[self.project(px, py)] & mask != 0
+                                && self.pixel_colors[py * self.width + px] == cand
+                            {
+                                score += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if score > best.1 {
+                best = (cand, score);
+            }
+        }
+        best.0
     }
 
     fn project(&self, x: usize, y: usize) -> usize {
@@ -159,8 +267,12 @@ impl BrailleBuffer {
                     break;
                 }
 
-                let color_code =
-                    self.term_color(self.foreground_buffer[idx], self.background_buffer[idx]);
+                let fg = if self.char_buffer[idx].is_some() {
+                    self.foreground_buffer[idx]
+                } else {
+                    self.resolve_cell_color(x, y)
+                };
+                let color_code = self.term_color(fg, self.background_buffer[idx]);
                 if current_color != color_code {
                     output.push_str(&color_code);
                     current_color = color_code;
@@ -216,6 +328,78 @@ impl BrailleBuffer {
                 self.set_char(ch, px as usize, y, color);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WATER: u8 = 69;
+    const WHITE: u8 = 231;
+
+    /// A thin line crossing a fully lit cell must not recolor the water dots
+    /// (white borders bleeding into the ocean)
+    #[test]
+    fn line_does_not_bleed_into_filled_cell() {
+        let mut buf = BrailleBuffer::new(8, 8);
+        // Fill everything with water
+        for y in 0..8 {
+            for x in 0..8 {
+                buf.set_pixel(x, y, WATER);
+            }
+        }
+        // Draw a 1px horizontal white line through the middle cell row
+        for x in 0..8 {
+            buf.set_pixel(x, 1, WHITE);
+        }
+        // Every cell still resolves to the water color (6 of 8 dots are water)
+        for cy in 0..2 {
+            for cx in 0..4 {
+                assert_eq!(buf.resolve_cell_color(cx, cy), WATER);
+            }
+        }
+    }
+
+    /// On unlit (land) cells the line color must win
+    #[test]
+    fn line_visible_on_empty_cells() {
+        let mut buf = BrailleBuffer::new(8, 8);
+        for x in 0..8 {
+            buf.set_pixel(x, 1, WHITE);
+        }
+        assert_eq!(buf.resolve_cell_color(0, 0), WHITE);
+        assert_eq!(buf.resolve_cell_color(3, 0), WHITE);
+    }
+
+    /// A vertical line covering half a filled cell ties 4-4; the neighbor
+    /// vote must side with the surrounding water fill
+    #[test]
+    fn tie_resolved_by_neighbors() {
+        let mut buf = BrailleBuffer::new(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                buf.set_pixel(x, y, WATER);
+            }
+        }
+        // Vertical white line down one pixel column of cell (1,0)
+        for y in 0..4 {
+            buf.set_pixel(2, y, WHITE);
+        }
+        assert_eq!(buf.resolve_cell_color(1, 0), WATER);
+    }
+
+    /// Markers use forced pixels and must always win the cell color
+    #[test]
+    fn forced_pixels_override_majority() {
+        let mut buf = BrailleBuffer::new(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                buf.set_pixel(x, y, WATER);
+            }
+        }
+        buf.set_pixel_forced(2, 1, 196);
+        assert_eq!(buf.resolve_cell_color(1, 0), 196);
     }
 }
 
