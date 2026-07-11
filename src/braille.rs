@@ -259,6 +259,11 @@ impl BrailleBuffer {
             if y > 0 {
                 output.push_str("\r\n");
             }
+            // Re-emit the color at the start of every row so each line is
+            // self contained. Embedders (like vigil) reposition and reset
+            // lines individually; relying on color state carrying across
+            // line breaks leaves such rows rendered in the default color.
+            current_color.clear();
             let mut skip: usize = 0;
 
             for x in 0..cols {
@@ -387,6 +392,26 @@ mod tests {
             buf.set_pixel(2, y, WHITE);
         }
         assert_eq!(buf.resolve_cell_color(1, 0), WATER);
+    }
+
+    /// Every row of the rendered frame must start with its own color code
+    /// so embedders can reposition or reset lines independently
+    #[test]
+    fn frame_rows_are_color_self_contained() {
+        let mut buf = BrailleBuffer::new(8, 16);
+        for y in 0..16 {
+            for x in 0..8 {
+                buf.set_pixel(x, y, WATER);
+            }
+        }
+        let frame = buf.frame(true);
+        for line in frame.split("\r\n") {
+            assert!(
+                line.starts_with('\x1B'),
+                "row does not begin with a color escape: {:?}",
+                line
+            );
+        }
     }
 
     /// Markers use forced pixels and must always win the cell color
