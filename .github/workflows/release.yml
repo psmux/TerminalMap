@@ -409,7 +409,7 @@ jobs:
             '    <id>terminalmap</id>'
             ('    <version>{0}</version>' -f $ver)
             '    <title>TerminalMap</title>'
-            '    <authors>psmux</authors>'
+            '    <authors>Godwin Sam Josh</authors>'
             '    <owners>psmux</owners>'
             '    <licenseUrl>https://github.com/psmux/TerminalMap/blob/master/LICENSE</licenseUrl>'
             '    <projectUrl>https://github.com/psmux/TerminalMap</projectUrl>'
@@ -700,7 +700,7 @@ jobs:
           PackageUrl: https://github.com/psmux/TerminalMap
           License: MIT
           LicenseUrl: https://github.com/psmux/TerminalMap/blob/master/LICENSE
-          Copyright: Copyright (c) psmux
+          Copyright: Copyright (c) Godwin Sam Josh
           ShortDescription: High precision terminal map viewer with braille rendering
           Description: |-
             TerminalMap is a high precision, interactive map viewer and embeddable Rust SDK
