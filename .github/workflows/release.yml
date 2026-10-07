@@ -23,6 +23,7 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    environment: ${{ github.ref_type == 'tag' && 'windows-signing' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -94,6 +95,29 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
+      # Parallel legs sign one at a time.
+      - name: Stagger signing
+        if: runner.os == 'Windows' && github.ref_type == 'tag'
+        shell: pwsh
+        run: Start-Sleep -Seconds (35 * ${{ strategy.job-index }})
+
+      # Code sign Windows binaries on release tags.
+      - name: Log in to code signing service
+        id: certum
+        if: runner.os == 'Windows' && github.ref_type == 'tag'
+        uses: jay0lee/certum-cloud-code-sign@a3324503499c49090869856eeeecfe95fb613d87
+        with:
+          username: ${{ secrets.CERTUM_USERNAME }}
+          totp_secret: ${{ secrets.CERTUM_TOTP_SECRET }}
+          totp_algorithm: ${{ vars.CERTUM_TOTP_ALGORITHM || 'SHA-256' }}
+
+      - name: Sign binary
+        if: steps.certum.outcome == 'success'
+        shell: pwsh
+        run: |
+          & "${{ steps.certum.outputs.signtool-path }}" sign /sha1 ${{ steps.certum.outputs.cert-thumbprint }} /tr http://time.certum.pl /td SHA256 /fd SHA256 /d "TerminalMap" "target/${{ matrix.target }}/release/terminalmap.exe"
+          if ($LASTEXITCODE -ne 0) { throw "signtool could not sign terminalmap.exe" }
+
       - name: Install cargo-deb
         if: matrix.deb
         run: cargo install cargo-deb
@@ -121,6 +145,21 @@ jobs:
           Compress-Archive -Path "$dir/*" -DestinationPath "$dir.zip"
           Write-Output "Created: $dir.zip"
 
+      - name: Verify signature in release zip
+        if: runner.os == 'Windows' && github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $signtool = "${{ steps.certum.outputs.signtool-path }}"
+          if (-not $signtool) { Write-Host "::error::signtool is not available"; exit 1 }
+          $zip = Get-Item "terminalmap-*-${{ matrix.artifact_name }}.zip"
+          Expand-Archive -Path $zip.FullName -DestinationPath zipcheck -Force
+          $bad = 0
+          foreach ($f in @("target/${{ matrix.target }}/release/terminalmap.exe") + (Get-ChildItem zipcheck -Recurse -Filter *.exe).FullName) {
+            & $signtool verify /pa /q $f
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::not signed: $f"; $bad = 1 } else { Write-Host "signed: $f" }
+          }
+          if ($bad) { exit 1 }
+
       - name: Create release tarball (Linux/macOS)
         if: matrix.archive == 'tar.gz'
         run: |
@@ -144,6 +183,10 @@ jobs:
         with:
           name: terminalmap-deb-${{ matrix.artifact_name }}
           path: target/${{ matrix.target }}/debian/*.deb
+
+      - name: Log out of code signing service
+        if: always() && steps.certum.outcome != 'skipped' && steps.certum.outcome != ''
+        uses: jay0lee/certum-cloud-code-sign/teardown@a3324503499c49090869856eeeecfe95fb613d87
 
   # ------------------------------------------------------------------
   # 2. Create GitHub Release with changelog
